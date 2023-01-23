@@ -42,12 +42,14 @@ int main(int argc, char const *argv[]) {
     int totalsent = 0;
     int read_error_accured = 0;
 
+
     define_sigint();  /* SIGINT handler*/
 
     if (argc != 2) {
         perror("ERROR: invalid number of arguments");
         exit(1);
     }
+    memset(curr_pcc_count, 0, sizeof(pcc_total));
 
     /* get cmd arguments */
     server_port = atoi(argv[1]);
@@ -87,6 +89,8 @@ int main(int argc, char const *argv[]) {
 
     /* iterativly - accepts a TCP connection */
     while (1) {
+        client_in_process = 0;
+        read_error_accured = 0;
         /* if SIGINT was sent - don't accept another connection and terminate server */
         if (sigint) {
             terminate_server();
@@ -102,18 +106,15 @@ int main(int argc, char const *argv[]) {
         }
 
         client_in_process = 1; /* mark that a client is connected */
+        memset(curr_pcc_count, 0, sizeof(pcc_total));
 
         totalread = read_data_from_client(connfd, (char*) &endian_N, 4); /*32bits == 4 bytes */
 
         /* in case the reading error is one of ETIMEDOUT, ECONNRESET, or EPIPE 
         * OR the client was killed unexpectedly - start new client connection */
-        if (totalread < 0 || totalread != 4) {
-            if (totalread != 4) {
-                perror("ERROR: Client connections may have terminated due to client process was killed unexpectedly");
-            }
+        if (totalread < 0) {
             close(connfd);
             connfd = -1;
-            client_in_process = 0;
             continue;
         }
         
@@ -128,7 +129,7 @@ int main(int argc, char const *argv[]) {
             /* create a buffer of the maximal amount of data recieved */
             batch_size = min(bytes_left, MAX_BATCH_SIZE);
 
-            batch_buffer = (char*) malloc(batch_size*sizeof(char));
+            batch_buffer = (char*) malloc(batch_size);
             if (batch_buffer == NULL) {
                 perror("ERROR: an error accured while allocating memory to batch buffer");
                 exit(1);
@@ -137,14 +138,10 @@ int main(int argc, char const *argv[]) {
             totalread = read_data_from_client(connfd, batch_buffer, batch_size);
 
             /* in case the reading error is one of ETIMEDOUT, ECONNRESET, or EPIPE OR the client was killed unexpectedly - start new client connection */
-            if (totalread < 0 || totalread != batch_size) {
-                if (totalread != batch_size) {
-                    perror("ERROR: Client connections may have terminated due to client process was killed unexpectedly");
-                }
+            if (totalread < 0) {
                 close(connfd);
                 read_error_accured = 1;
                 connfd = -1;
-                client_in_process = 0;
                 break;
             }
 
@@ -152,7 +149,7 @@ int main(int argc, char const *argv[]) {
             for (i = 0; i < batch_size; i++) {
                 if (32 <= batch_buffer[i] && batch_buffer[i] <= 126) {
                     C++;
-                    curr_pcc_count[batch_buffer[i] - 32]++;
+                    curr_pcc_count[batch_buffer[i]-32]++;
                 }
             }
             free(batch_buffer);
@@ -169,24 +166,20 @@ int main(int argc, char const *argv[]) {
         totalsent = send_data_to_client(connfd, (char*) &endian_C, 4); /*32bits == 4bytes*/
 
         /* in case the sending error is one of ETIMEDOUT, ECONNRESET, or EPIPE OR the client was killed unexpectedly - start new client connection */
-        if (totalsent < 0 || totalsent != 4) {
-            if (totalsent != 4) {
-                perror("ERROR: Client connections may have terminated due to client process was killed unexpectedly");
-            }
+        if (totalsent < 0) {
             close(connfd);
             connfd = -1;
-            client_in_process = 0;
             continue;
         }
 
         /* After sending the result to the client, update the pcc_total global data structure */
         for (i = 0; i < 95; i++){
-            pcc_total[i] = curr_pcc_count[i];
+            pcc_total[i] += curr_pcc_count[i];
         }
 
         close(connfd);
-        client_in_process = 0;
     }
+
     return 0;
 }
 
@@ -198,7 +191,7 @@ int main(int argc, char const *argv[]) {
 */
 void define_sigint() {
     struct sigaction new_action = {
-        .sa_handler = sigint_handler,
+        .sa_sigaction = sigint_handler,
         .sa_flags = SA_RESTART,
     };  
     
@@ -223,9 +216,10 @@ void sigint_handler() {
 int read_data_from_client(int connfd, char* buffer, int count) {
     int bytes_read = 1;
     int totalread = 0;
+    int curr_count = count;
     
-    while (count > 0) {
-        bytes_read = read(connfd, buffer+totalread, count);
+    while (bytes_read > 0) {
+        bytes_read = read(connfd, buffer+totalread, curr_count);
         
         if (bytes_read < 0) {
             totalread = -1;
@@ -233,10 +227,16 @@ int read_data_from_client(int connfd, char* buffer, int count) {
         }
 
         totalread += bytes_read;
-        count -= bytes_read;
+        curr_count -= bytes_read;
     }
 
     /* check for errors */
+    if (bytes_read == 0) {
+        if (totalread != count) {
+            perror("ERROR: Client connections may have terminated due to client process was killed unexpectedly");
+            totalread = -1;
+        }
+    }
     if (bytes_read < 0) {
         if (errno == ETIMEDOUT || errno == ECONNRESET || errno == EPIPE) {
             perror("ERROR: an error accured while reading from client, closing current client connection");
@@ -253,22 +253,29 @@ int read_data_from_client(int connfd, char* buffer, int count) {
 *
 */
 int send_data_to_client(int connfd, char* buffer, int count) {
-    int bytes_sent;
+    int bytes_sent = 1;
     int totalsent = 0;
+    int curr_count = count;
 
     /* iterate until all buffer bytes are written to connection fd */
-    while (count > 0) {
-        bytes_sent = write(connfd, buffer+totalsent, count);
+    while (bytes_sent > 0) {
+        bytes_sent = write(connfd, buffer+totalsent, curr_count);
 
         if (bytes_sent < 0) {
             totalsent = -1;
             break;
         }
         totalsent += bytes_sent;
-        count -= bytes_sent;
+        curr_count -= bytes_sent;
     }
 
     /* check for errors */
+    if (bytes_sent == 0) {
+        if (totalsent != count) {
+            perror("ERROR: Client connections may have terminated due to client process was killed unexpectedly");
+            totalsent = -1;
+        }
+    }
     if (bytes_sent < 0) {
         if (errno == ETIMEDOUT || errno == ECONNRESET || errno == EPIPE) {
             perror("ERROR: an error accured while reading from client, closing current client connection");

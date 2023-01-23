@@ -53,7 +53,7 @@ int main(int argc, char const *argv[]) {
     fseek(fd, 0L, SEEK_SET);
 
     /* create a TCP connection (code from rec10) */
-    if( (sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+    if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror("ERROR: Could not create socket \n");
         exit(1);
     }
@@ -76,10 +76,11 @@ int main(int argc, char const *argv[]) {
 
     /* send given file data in batches */
     bytes_left = N;
+
     while (bytes_left > 0) {
         /* create a buffer of the maximal amount of data from given file */
         batch_size = min(bytes_left, MAX_BATCH_SIZE);
-        
+
         batch_file_buffer = (char*) malloc(batch_size*sizeof(char));
         if (batch_file_buffer == NULL) {
             perror("ERROR: an error accured while allocating memory to batch file buffer");
@@ -114,7 +115,7 @@ int main(int argc, char const *argv[]) {
 *
 */
 int send_data_to_server(int sockfd, char* buffer, int count) {
-    int bytes_sent;
+    int bytes_sent = 1;
     int totalsent = 0;
 
     /* iterate until all buffer bytes are written to socket fd */
@@ -122,7 +123,7 @@ int send_data_to_server(int sockfd, char* buffer, int count) {
         bytes_sent = write(sockfd, buffer+totalsent, count);
 
         if (bytes_sent < 0) {
-            perror("ERROR: could not write to server");
+            perror("ERROR: an error accured while writing to server");
             exit(1);
         }
         totalsent += bytes_sent;
@@ -140,7 +141,7 @@ int read_data_from_server(int sockfd, char* buffer, int count) {
     int bytes_read = 1;
     int totalread = 0;
     
-    while (count > 0) {  /* C is 32bits == 4bytes*/
+    while (bytes_read > 0) {  /* C is 32bits == 4bytes*/
         bytes_read = read(sockfd, buffer+totalread, count);
         if (bytes_read < 0) {
             perror("ERROR: an error accured while reading bytes from server");
